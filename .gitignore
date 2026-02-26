@@ -1,0 +1,7 @@
+*.pkl
+*.csv
+__pycache__/
+*.pyc
+.env
+credentials.json
+mlruns/
