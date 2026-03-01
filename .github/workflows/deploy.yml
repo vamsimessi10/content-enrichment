@@ -25,17 +25,18 @@ jobs:
         run: |
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      - name: Build and Push to Artifact Registry
+      - name: Build Docker image
         run: |
-          gcloud builds submit \
-            --tag us-central1-docker.pkg.dev/content-enrichment-488220/content-enrichment/content-enrichment \
-            --suppress-logs \
-            .
+          docker build -t us-central1-docker.pkg.dev/content-enrichment-488220/content-enrichment/content-enrichment:latest .
+
+      - name: Push to Artifact Registry
+        run: |
+          docker push us-central1-docker.pkg.dev/content-enrichment-488220/content-enrichment/content-enrichment:latest
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy content-enrichment \
-            --image us-central1-docker.pkg.dev/content-enrichment-488220/content-enrichment/content-enrichment \
+            --image us-central1-docker.pkg.dev/content-enrichment-488220/content-enrichment/content-enrichment:latest \
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
