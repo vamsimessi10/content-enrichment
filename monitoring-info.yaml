@@ -1,0 +1,48 @@
+id: content-enrichment
+description: Monitoring configuration for content enrichment ML API
+owner: vamsimessi10
+
+alerts:
+  - name: high-error-rate
+    description: Fires when error rate exceeds 5% over 5 minutes
+    condition: error_rate > 0.05
+    window: 5m
+    severity: critical
+    notify: email
+
+  - name: high-latency
+    description: Fires when p99 latency exceeds 2 seconds
+    condition: latency_p99 > 2000ms
+    window: 5m
+    severity: warning
+    notify: email
+
+  - name: api-down
+    description: Fires when /health check fails
+    condition: uptime_check_failed
+    window: 1m
+    severity: critical
+    notify: email
+
+uptime_checks:
+  - name: health-check
+    endpoint: https://content-enrichment-177416861217.us-central1.run.app/health
+    frequency: 5m
+    expected_status: 200
+
+metrics:
+  - name: prediction_requests_total
+    description: Total number of prediction requests
+    type: counter
+
+  - name: prediction_latency_ms
+    description: Latency of prediction requests in milliseconds
+    type: histogram
+
+  - name: prediction_confidence_avg
+    description: Average confidence score of predictions
+    type: gauge
+
+  - name: error_rate
+    description: Percentage of requests returning 4xx or 5xx
+    type: gauge
