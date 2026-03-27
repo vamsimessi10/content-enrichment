@@ -60,7 +60,7 @@ class PredictResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0"}
+    raise Exception("deliberate failure for alert testing")
 
 @app.get("/model/info")
 def model_info():
