@@ -52,9 +52,10 @@ with patch('google.cloud.storage.Client') as mock_storage, \
         pickle.dump(classifier, f)
 
     def mock_download(filename):
-        if "classifier" in filename:
+        if "classifier" in filename and filename != "/tmp/v2_classifier.pkl":
             import shutil
-            shutil.copy("/tmp/v2_classifier.pkl", filename)
+            shutil.copy("/tmp/v2_classifier.pkcd ~/content-enrichment
+l", filename)
 
     mock_blob.download_to_filename.side_effect = mock_download
 
