@@ -3,43 +3,56 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from google.cloud import storage
 import pickle
+import zipfile
 import os
 import logging
 import time
+from sentence_transformers import SentenceTransformer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PROJECT_ID = "content-enrichment-488220"
 BUCKET = "content-enrichment-488220"
-MODEL_PATH = "models/best_model.pkl"
 
 app = FastAPI(
     title="Content Enrichment API",
-    description="Classifies text content into categories using NLP",
-    version="1.0.0"
+    description="Classifies text content into categories using HuggingFace embeddings",
+    version="2.0.0"
 )
 
-def load_model_from_gcs():
-    logger.info(f"Loading model from gs://{BUCKET}/{MODEL_PATH}")
+def load_models_from_gcs():
+    logger.info("Loading v2 models from GCS...")
     gcs_client = storage.Client(project=PROJECT_ID)
     bucket = gcs_client.bucket(BUCKET)
-    blob = bucket.blob(MODEL_PATH)
-    blob.download_to_filename("model.pkl")
-    with open("model.pkl", "rb") as f:
-        pipeline = pickle.load(f)
-    logger.info("Model loaded successfully ✅")
-    return pipeline
 
-pipeline = load_model_from_gcs()
+    # load classifier
+    bucket.blob("models/v2_classifier.pkl").download_to_filename("/tmp/v2_classifier.pkl")
+    with open("/tmp/v2_classifier.pkl", "rb") as f:
+        classifier = pickle.load(f)
+    logger.info("Classifier loaded ✅")
+
+    # load embedder
+    bucket.blob("models/v2_embedder.zip").download_to_filename("/tmp/v2_embedder.zip")
+    with zipfile.ZipFile("/tmp/v2_embedder.zip", "r") as z:
+        z.extractall("/tmp/v2_embedder")
+    embedder = SentenceTransformer("/tmp/v2_embedder")
+    logger.info("Embedder loaded ✅")
+
+    return embedder, classifier
+
+embedder, classifier = load_models_from_gcs()
 
 MODEL_METADATA = {
-    "model_name": "logistic_regression_c1",
-    "version": "1.0.0",
-    "accuracy": 0.9221,
-    "f1_weighted": 0.9219,
+    "model_name": "linear_svc_on_minilm_embeddings",
+    "version": "2.0.0",
+    "embedding_model": "all-MiniLM-L6-v2",
+    "embedding_dim": 384,
+    "accuracy": 0.8880,
+    "f1_weighted": 0.8878,
     "categories": ["World", "Sports", "Business", "Sci_Tech"],
-    "trained_on": "AG News Dataset (120k articles)"
+    "trained_on": "AG News Dataset (10k sample)",
+    "improvement_over_v1": "semantic embeddings replace TF-IDF"
 }
 
 class PredictRequest(BaseModel):
@@ -48,7 +61,7 @@ class PredictRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "text": "Apple reports record quarterly earnings"
+                "text": "Federal Reserve raises interest rates"
             }
         }
 
@@ -57,10 +70,11 @@ class PredictResponse(BaseModel):
     confidence: float
     all_scores: dict
     input_text: str
+    model_version: str
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "2.0.0"}
 
 @app.get("/model/info")
 def model_info():
@@ -77,9 +91,23 @@ def predict(request: PredictRequest):
         )
 
     try:
-        prediction = pipeline.predict([request.text])[0]
-        probabilities = pipeline.predict_proba([request.text])[0]
-        categories = pipeline.classes_
+        # embed text
+        embedding = embedder.encode([request.text])
+
+        # predict category
+        prediction = classifier.predict(embedding)[0]
+
+        # get confidence scores
+        # LinearSVC does not have predict_proba
+        # use decision function instead
+        decision = classifier.decision_function(embedding)[0]
+        categories = classifier.classes_
+
+        # convert decision scores to probabilities via softmax
+        import numpy as np
+        exp_scores = np.exp(decision - np.max(decision))
+        probabilities = exp_scores / exp_scores.sum()
+
         all_scores = {
             cat: round(float(prob), 4)
             for cat, prob in zip(categories, probabilities)
@@ -92,14 +120,16 @@ def predict(request: PredictRequest):
             "input_length": len(request.text),
             "predicted_category": prediction,
             "confidence": confidence,
-            "latency_ms": latency_ms
+            "latency_ms": latency_ms,
+            "model_version": "2.0.0"
         })
 
         return PredictResponse(
             category=prediction,
             confidence=confidence,
             all_scores=all_scores,
-            input_text=request.text
+            input_text=request.text,
+            model_version="2.0.0"
         )
 
     except Exception as e:
