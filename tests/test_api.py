@@ -8,33 +8,26 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# mock everything before app imports
 with patch('google.cloud.storage.Client') as mock_storage, \
      patch('sentence_transformers.SentenceTransformer') as mock_embedder_class, \
      patch('zipfile.ZipFile') as mock_zip:
 
-    # mock GCS
     mock_bucket = MagicMock()
     mock_blob = MagicMock()
     mock_storage.return_value.bucket.return_value = mock_bucket
     mock_bucket.blob.return_value = mock_blob
-    mock_blob.download_to_filename.return_value = None
 
-    # mock embedder
     mock_embedder = MagicMock()
     mock_embedder.encode.return_value = np.random.rand(1, 384)
     mock_embedder_class.return_value = mock_embedder
 
-    # mock zip
     mock_zip.return_value.__enter__ = MagicMock(return_value=MagicMock())
     mock_zip.return_value.__exit__ = MagicMock(return_value=False)
 
-    # create minimal mock classifier
     from sklearn.svm import LinearSVC
-    from sklearn.pipeline import Pipeline
-    import pickle
+    from sklearn.feature_extraction.text import TfidfVectorizer
 
-    classifier = LinearSVC()
+    tfidf = TfidfVectorizer()
     texts = [
         "stock market business economy finance",
         "football basketball sports game championship",
@@ -42,10 +35,9 @@ with patch('google.cloud.storage.Client') as mock_storage, \
         "technology science computer nasa research"
     ]
     labels = ["Business", "Sports", "World", "Sci_Tech"]
-
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    tfidf = TfidfVectorizer()
     X = tfidf.fit_transform(texts)
+
+    classifier = LinearSVC()
     classifier.fit(X.toarray(), labels)
 
     with open("/tmp/v2_classifier.pkl", "wb") as f:
@@ -54,18 +46,14 @@ with patch('google.cloud.storage.Client') as mock_storage, \
     def mock_download(filename):
         if "classifier" in filename and filename != "/tmp/v2_classifier.pkl":
             import shutil
-            shutil.copy("/tmp/v2_classifier.pkcd ~/content-enrichment
-l", filename)
+            shutil.copy("/tmp/v2_classifier.pkl", filename)
 
     mock_blob.download_to_filename.side_effect = mock_download
 
-    # mock predict to return valid results
-    mock_embedder.encode.return_value = np.random.rand(1, 384)
-
     from app import app
 
-# patch the module level embedder and classifier
 import app as app_module
+
 mock_clf = MagicMock()
 mock_clf.predict.return_value = ["Business"]
 mock_clf.decision_function.return_value = np.array([[0.1, 0.2, 0.8, 0.3]])
@@ -74,8 +62,6 @@ app_module.classifier = mock_clf
 app_module.embedder = mock_embedder
 
 client = TestClient(app)
-
-# ── SDE layer tests ───────────────────────────────────────────────────────────
 
 def test_health_returns_200():
     response = client.get("/health")
@@ -135,8 +121,6 @@ def test_short_text_returns_422():
 def test_empty_text_returns_422():
     response = client.post("/predict", json={"text": ""})
     assert response.status_code == 422
-
-# ── MLE layer tests ───────────────────────────────────────────────────────────
 
 def test_confidence_between_0_and_1():
     response = client.post("/predict", json={"text": "Federal Reserve raises interest rates amid inflation concerns"})
