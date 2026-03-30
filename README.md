@@ -9,6 +9,15 @@ GitHub: https://github.com/vamsimessi10/content-enrichment
 
 ---
 
+## Versions
+
+- v1: Classical NLP — TF-IDF + Logistic Regression, 92.21% accuracy (120k training rows)
+- v2 (current): Semantic NLP — HuggingFace all-MiniLM-L6-v2 embeddings + LinearSVC, 88.8% accuracy (10k sample, CPU constrained — full dataset with GPU expected to exceed v1)
+- v3 (planned): Automated MLOps — Kubeflow pipelines + LangChain agent
+- v4 (planned): Big data — PySpark + GCP Dataproc
+
+> V2 note: trained on 10k sample due to Colab CPU constraints. On full 120k rows with GPU, HuggingFace embeddings are expected to match or exceed v1 accuracy. In production this would use GPU clusters for embedding generation.
+
 ## What it does
 
 Send a POST request with any news text and get back a category prediction with confidence scores for all four classes.
