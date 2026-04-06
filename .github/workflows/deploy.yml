@@ -19,11 +19,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
       - name: Run tests
         run: |
-          python3 -m pytest tests/test_api.py -v
+          python -m pytest tests/test_api.py -v
 
   deploy:
     runs-on: ubuntu-latest
