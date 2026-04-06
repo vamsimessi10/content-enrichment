@@ -1,0 +1,215 @@
+# PIPELINE DEFINITION
+# Name: content-enrichment-retraining-simple
+# Description: Simplified single container retraining pipeline
+# Inputs:
+#    bucket: str [Default: 'content-enrichment-488220']
+#    project_id: str [Default: 'content-enrichment-488220']
+#    threshold: float [Default: 0.01]
+components:
+  comp-get-current-accuracy-v3:
+    executorLabel: exec-get-current-accuracy-v3
+    inputDefinitions:
+      parameters:
+        bucket:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-train-and-deploy-all-in-one:
+    executorLabel: exec-train-and-deploy-all-in-one
+    inputDefinitions:
+      parameters:
+        bucket:
+          parameterType: STRING
+        current_accuracy:
+          parameterType: NUMBER_DOUBLE
+        project_id:
+          parameterType: STRING
+        threshold:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-get-current-accuracy-v3:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - get_current_accuracy_v3
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef get_current_accuracy_v3(\n    project_id: str,\n    bucket: str,\n\
+          ) -> float:\n    from google.cloud import storage\n    import json\n\n \
+          \   gcs_client = storage.Client(project=project_id)\n    bucket_obj = gcs_client.bucket(bucket)\n\
+          \    blob = bucket_obj.blob(\"models/production_metadata.json\")\n\n   \
+          \ if blob.exists():\n        metadata = json.loads(blob.download_as_text())\n\
+          \        accuracy = float(metadata[\"accuracy\"])\n        print(f\"Current\
+          \ production accuracy: {accuracy:.4f}\")\n        return accuracy\n    else:\n\
+          \        print(\"No metadata found. Using baseline 0.80\")\n        return\
+          \ 0.80\n\n"
+        image: python:3.11
+    exec-train-and-deploy-all-in-one:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_and_deploy_all_in_one
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
+          \ 'pandas' 'pyarrow' 'db-dtypes' 'sentence-transformers' 'scikit-learn'\
+          \ 'numpy' 'google-cloud-storage' 'torch' 'transformers'  &&  python3 -m\
+          \ pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_and_deploy_all_in_one(\n    project_id: str,\n    bucket:\
+          \ str,\n    current_accuracy: float,\n    threshold: float,\n    metrics:\
+          \ Output[Metrics]\n):\n    \"\"\"\n    Single container that does everything:\n\
+          \    fetch \u2192 embed \u2192 train \u2192 evaluate \u2192 deploy\n   \
+          \ avoids all inter-container data passing issues\n    \"\"\"\n    import\
+          \ numpy as np\n    import pandas as pd\n    from sklearn.svm import LinearSVC\n\
+          \    from sklearn.metrics import accuracy_score, f1_score\n    from sklearn.model_selection\
+          \ import train_test_split\n    from sentence_transformers import SentenceTransformer\n\
+          \    from google.cloud import bigquery, storage\n    import pickle\n   \
+          \ import json\n    from datetime import datetime, timezone\n    import traceback\n\
+          \n    try:\n        # step 1: fetch data\n        print(\"=== Step 1: Fetching\
+          \ data ===\")\n        client = bigquery.Client(project=project_id)\n  \
+          \      df = client.query(\"\"\"\n            SELECT text_clean, category\n\
+          \            FROM `content-enrichment-488220.content_enrichment.ag_news_raw`\n\
+          \            WHERE split = 'train'\n            AND text_clean IS NOT NULL\n\
+          \            ORDER BY RAND()\n            LIMIT 10000\n        \"\"\").to_dataframe()\n\
+          \        print(f\"Fetched {len(df)} rows\")\n\n        # step 2: generate\
+          \ embeddings\n        print(\"=== Step 2: Generating embeddings ===\")\n\
+          \        embedder = SentenceTransformer(\"all-MiniLM-L6-v2\")\n        embeddings\
+          \ = embedder.encode(\n            df[\"text_clean\"].tolist(),\n       \
+          \     batch_size=32,\n            show_progress_bar=True\n        )\n  \
+          \      embeddings = embeddings.astype(np.float32)\n        labels = df[\"\
+          category\"].values\n        print(f\"Embeddings shape: {embeddings.shape}\"\
+          )\n\n        # step 3: train\n        print(\"=== Step 3: Training ===\"\
+          )\n        X_train, X_test, y_train, y_test = train_test_split(\n      \
+          \      embeddings, labels,\n            test_size=0.2,\n            random_state=42,\n\
+          \            stratify=labels\n        )\n        model = LinearSVC(C=1.0,\
+          \ max_iter=2000)\n        model.fit(X_train, y_train)\n\n        y_pred\
+          \ = model.predict(X_test)\n        new_accuracy = float(accuracy_score(y_test,\
+          \ y_pred))\n        f1 = float(f1_score(y_test, y_pred, average=\"weighted\"\
+          ))\n        print(f\"Accuracy: {new_accuracy:.4f}\")\n        print(f\"\
+          F1:       {f1:.4f}\")\n\n        metrics.log_metric(\"accuracy\", new_accuracy)\n\
+          \        metrics.log_metric(\"f1_weighted\", f1)\n\n        # step 4: evaluate\
+          \ and deploy\n        print(\"=== Step 4: Evaluate and Deploy ===\")\n \
+          \       print(f\"New accuracy:     {new_accuracy:.4f}\")\n        print(f\"\
+          Current accuracy: {current_accuracy:.4f}\")\n        print(f\"Threshold:\
+          \        {threshold:.4f}\")\n\n        gcs_client = storage.Client(project=project_id)\n\
+          \        bucket_obj = gcs_client.bucket(bucket)\n\n        if new_accuracy\
+          \ >= current_accuracy - threshold:\n            print(\"Deploying new model...\"\
+          )\n            with open(\"/tmp/new_model.pkl\", \"wb\") as f:\n       \
+          \         pickle.dump(model, f)\n\n            bucket_obj.blob(\"models/v2_classifier.pkl\"\
+          ).upload_from_filename(\n                \"/tmp/new_model.pkl\"\n      \
+          \      )\n\n            metadata = {\n                \"accuracy\": new_accuracy,\n\
+          \                \"f1_weighted\": f1,\n                \"promoted_at\":\
+          \ datetime.now(timezone.utc).isoformat(),\n                \"model_path\"\
+          : \"models/v2_classifier.pkl\"\n            }\n            bucket_obj.blob(\"\
+          models/production_metadata.json\").upload_from_string(\n               \
+          \ json.dumps(metadata)\n            )\n            print(f\"New model deployed\
+          \ \u2705 accuracy={new_accuracy:.4f}\")\n        else:\n            print(\"\
+          New model did not meet threshold. Keeping current.\")\n\n    except Exception\
+          \ as e:\n        print(f\"FULL ERROR: {type(e).__name__}: {str(e)}\")\n\
+          \        traceback.print_exc()\n        raise\n\n"
+        image: python:3.11
+pipelineInfo:
+  description: Simplified single container retraining pipeline
+  name: content-enrichment-retraining-simple
+root:
+  dag:
+    tasks:
+      get-current-accuracy-v3:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-get-current-accuracy-v3
+        inputs:
+          parameters:
+            bucket:
+              componentInputParameter: bucket
+            project_id:
+              componentInputParameter: project_id
+        taskInfo:
+          name: get-current-accuracy-v3
+      train-and-deploy-all-in-one:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-and-deploy-all-in-one
+        dependentTasks:
+        - get-current-accuracy-v3
+        inputs:
+          parameters:
+            bucket:
+              componentInputParameter: bucket
+            current_accuracy:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: get-current-accuracy-v3
+            project_id:
+              componentInputParameter: project_id
+            threshold:
+              componentInputParameter: threshold
+        taskInfo:
+          name: train-and-deploy-all-in-one
+  inputDefinitions:
+    parameters:
+      bucket:
+        defaultValue: content-enrichment-488220
+        isOptional: true
+        parameterType: STRING
+      project_id:
+        defaultValue: content-enrichment-488220
+        isOptional: true
+        parameterType: STRING
+      threshold:
+        defaultValue: 0.01
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
